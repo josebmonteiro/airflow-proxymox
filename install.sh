@@ -3,6 +3,7 @@ set -e
 
 AIRFLOW_VERSION="3.1.0"
 AIRFLOW_HOME="/home/airflow/airflow"
+PASS_FILE="/root/airflow_admin_password"
 
 echo "Checking previous installation..."
 if [ -f /etc/systemd/system/airflow-webserver.service ]; then
@@ -34,7 +35,7 @@ SELECT 'CREATE DATABASE airflow OWNER airflow'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='airflow')\gexec
 EOF
 
-echo "Installing Airflow"
+echo "Installing Airflow and bootstrapping"
 sudo -u airflow bash <<EOF
 cd ~
 
@@ -49,25 +50,18 @@ CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${A
 pip install "apache-airflow[celery,postgres,redis]==${AIRFLOW_VERSION}" --constraint "\${CONSTRAINT_URL}"
 
 export AIRFLOW_HOME=${AIRFLOW_HOME}
-mkdir -p \$AIRFLOW_HOME
+mkdir -p \$AIRFLOW_HOME/dags
+mkdir -p \$AIRFLOW_HOME/logs
+mkdir -p \$AIRFLOW_HOME/plugins
 
-echo "Running initial standalone bootstrap..."
-airflow standalone &
-
-sleep 25
-pkill -f "airflow standalone" || true
+echo "Running standalone bootstrap..."
+airflow standalone > /tmp/airflow_boot.log 2>&1 &
+sleep 30
+pkill -f "airflow standalone"
 EOF
 
-echo "Configuring Airflow"
-sudo -u airflow bash <<EOF
-source ~/airflow-venv/bin/activate
-export AIRFLOW_HOME=${AIRFLOW_HOME}
-
-sed -i 's|executor = SequentialExecutor|executor = CeleryExecutor|' \$AIRFLOW_HOME/airflow.cfg
-sed -i 's|sql_alchemy_conn = .*|sql_alchemy_conn = postgresql+psycopg2://airflow:airflow@localhost/airflow|' \$AIRFLOW_HOME/airflow.cfg
-sed -i 's|broker_url = .*|broker_url = redis://localhost:6379/0|' \$AIRFLOW_HOME/airflow.cfg
-sed -i 's|result_backend = .*|result_backend = db+postgresql://airflow:airflow@localhost/airflow|' \$AIRFLOW_HOME/airflow.cfg
-EOF
+echo "Extracting admin password"
+grep "Password for user 'admin'" /home/airflow/airflow/airflow-webserver.log | tail -1 | awk '{print $NF}' > $PASS_FILE || true
 
 echo "Creating systemd services"
 

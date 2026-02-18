@@ -28,9 +28,11 @@ pct exec $CTID -- bash -c "$(wget -qLO - https://raw.githubusercontent.com/joseb
 msg_info "Waiting for Airflow API..."
 sleep 10
 
+PASS=$(pct exec $CTID -- cat /root/airflow_admin_password 2>/dev/null || echo "admin")
+
 msg_ok "Completed successfully!"
 echo -e "${CREATING}${GN}Apache Airflow has been successfully installed!${CL}"
 echo -e "${INFO}${YW}Access it using the following URL:${CL}"
 echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:8080${CL}"
 echo -e "${TAB}User: admin"
-echo -e "${TAB}Password: admin"
+echo -e "${TAB}Password: ${PASS}"
