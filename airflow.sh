@@ -25,8 +25,8 @@ msg_info "Provisioning Airflow inside container (this may take a few minutes)"
 
 pct exec $CTID -- bash -c "$(wget -qLO - https://raw.githubusercontent.com/josebmonteiro/airflow-proxymox/main/install.sh)"
 
-msg_info "Waiting Airflow API to respond..."
-sleep 8
+msg_info "Waiting for Airflow API..."
+sleep 10
 
 msg_ok "Completed successfully!"
 echo -e "${CREATING}${GN}Apache Airflow has been successfully installed!${CL}"
