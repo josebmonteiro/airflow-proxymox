@@ -218,6 +218,35 @@ if [[ -z "${ADMIN_PASS}" ]]; then
   ADMIN_PASS="(check inside CT: cat ${AIRFLOW_HOME}/simple_auth_manager_passwords.json.generated)"
 fi
 
+log "Fix Airflow metadata (disable examples + reset serialized DAGs)"
+
+pct exec "${CTID}" -- bash -lc "
+set -e
+
+cd ${AIRFLOW_HOME}
+
+# Disable example DAGs
+if grep -q 'load_examples = True' airflow.cfg; then
+  sed -i 's/load_examples = True/load_examples = False/g' airflow.cfg
+fi
+
+# Stop airflow
+systemctl stop airflow
+
+# Clean serialized DAGs (CORRETO PARA POSTGRES)
+export AIRFLOW_HOME=${AIRFLOW_HOME}
+export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASS}@${AIRFLOW_DB_HOST}:${AIRFLOW_DB_PORT}/${AIRFLOW_DB_NAME}
+
+${AIRFLOW_HOME}/venv/bin/airflow db reset -y
+
+# remove exemplos
+rm -rf ${AIRFLOW_HOME}/dags/*
+rm -rf ${AIRFLOW_HOME}/logs/*
+
+# start again
+systemctl start airflow
+"
+
 # ----------------------------
 # 7) Output access info
 # ----------------------------
