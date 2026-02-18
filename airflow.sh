@@ -4,14 +4,22 @@
 # Author: Jose Monteiro
 # License: MIT
 
-CTID="$1"
+echo "Detectando container do Airflow..."
+
+# tenta encontrar pelo hostname airflow
+CTID=$(pct list | grep airflow | awk '{print $1}')
+
+# se não encontrou, pega o último container criado
+if [ -z "$CTID" ]; then
+  CTID=$(pct list | awk 'NR>1 {print $1}' | tail -n1)
+fi
 
 if [ -z "$CTID" ]; then
-  echo "Uso: ./airflow.sh <CTID>"
+  echo "Nenhum container encontrado."
   exit 1
 fi
 
-echo "Iniciando Airflow no container $CTID..."
+echo "Usando container ID: $CTID"
 
 pct exec $CTID -- bash -c "
 cd /opt/airflow
