@@ -2,13 +2,12 @@
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
 
 APP="Apache Airflow"
-var_tags="${var_tags:-automation}"
-var_cpu="${var_cpu:-2}"
-var_ram="${var_ram:-4096}"
-var_disk="${var_disk:-15}"
-var_os="${var_os:-debian}"
-var_version="${var_version:-13}"
-var_unprivileged="${var_unprivileged:-1}"
+var_cpu="2"
+var_ram="4096"
+var_disk="20"
+var_os="debian"
+var_version="13"
+var_unprivileged="1"
 
 header_info "$APP"
 variables
@@ -18,75 +17,98 @@ catch_errors
 start
 build_container
 
-msg_info "Provisioning Airflow inside container..."
+msg_info "Installing Airflow inside container..."
 
 pct exec $CTID -- bash -c '
+
 set -e
 
-echo "Updating OS..."
+echo "Installing base dependencies..."
 apt update -y >/dev/null
+apt install -y curl git build-essential libssl-dev libffi-dev libpq-dev postgresql redis-server >/dev/null
 
-echo "Installing dependencies..."
-apt install -y python3 python3-venv python3-dev build-essential libpq-dev postgresql postgresql-contrib redis-server curl >/dev/null
+########################################
+# INSTALL PYTHON 3.11 (CRITICAL FIX)
+########################################
+echo "Installing Python 3.11..."
+apt install -y python3.11 python3.11-venv python3.11-dev >/dev/null
 
-echo "Starting services..."
-systemctl start postgresql || service postgresql start
-systemctl start redis-server || service redis-server start
-sleep 5
-
-echo "Creating database..."
+########################################
+# POSTGRES
+########################################
+echo "Configuring PostgreSQL..."
+systemctl start postgresql
 sudo -u postgres psql <<EOF
-DO \$\$
-BEGIN
-   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='\''airflow'\'') THEN
-      CREATE ROLE airflow LOGIN PASSWORD '\''airflow'\'';
-   END IF;
-END
-\$\$;
-
-SELECT '\''CREATE DATABASE airflow OWNER airflow'\''
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='\''airflow'\'')\gexec
+CREATE ROLE airflow LOGIN PASSWORD '\''airflow'\'' || true;
+CREATE DATABASE airflow OWNER airflow || true;
 EOF
 
+########################################
+# AIRFLOW
+########################################
 mkdir -p /opt/airflow
 cd /opt/airflow
 
-echo "Creating venv..."
-python3 -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate
 
-pip install --upgrade pip >/dev/null
+pip install --upgrade pip setuptools wheel >/dev/null
 
 AIRFLOW_VERSION=3.1.0
-PYTHON_VERSION=3.11
-CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.11.txt"
 
-echo "Installing Airflow..."
-pip install "apache-airflow[celery,postgres,redis]==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}" >/dev/null
+echo "Installing Apache Airflow..."
+pip install "apache-airflow[postgres,celery,redis]==${AIRFLOW_VERSION}" --constraint "$CONSTRAINT_URL"
 
+########################################
+# CONFIG
+########################################
 export AIRFLOW_HOME=/opt/airflow
 export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@localhost:5432/airflow
 
-echo "Initializing Airflow (this generates admin password)..."
-airflow standalone > /opt/airflow/standalone.log 2>&1 &
-sleep 35
+########################################
+# INITIALIZE
+########################################
+echo "Initializing Airflow..."
+airflow standalone > /opt/airflow/start.log 2>&1 &
+sleep 40
 
-echo "Extracting credentials..."
-USER=$(grep -i "username" /opt/airflow/standalone.log | head -n1 | awk "{print \$NF}")
-PASS=$(grep -i "password" /opt/airflow/standalone.log | head -n1 | awk "{print \$NF}")
+USER=$(grep -i "username" /opt/airflow/start.log | awk "{print \$NF}" | head -n1)
+PASS=$(grep -i "password" /opt/airflow/start.log | awk "{print \$NF}" | head -n1)
 
-echo "Username: $USER" > /root/airflow_credentials.txt
-echo "Password: $PASS" >> /root/airflow_credentials.txt
+echo "USER=$USER" > /root/airflow_creds
+echo "PASS=$PASS" >> /root/airflow_creds
 
-pkill -f "airflow standalone" || true
+pkill -f "airflow standalone"
 
-echo "Starting Airflow for real..."
-airflow standalone > /opt/airflow/standalone.log 2>&1 &
+########################################
+# SERVICE
+########################################
+cat <<SERVICE > /etc/systemd/system/airflow.service
+[Unit]
+Description=Apache Airflow
+After=network.target
+
+[Service]
+User=root
+Environment="AIRFLOW_HOME=/opt/airflow"
+Environment="AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@localhost:5432/airflow"
+ExecStart=/opt/airflow/venv/bin/airflow standalone
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+systemctl daemon-reload
+systemctl enable airflow
+systemctl start airflow
 '
 
-IP=$(pct exec $CTID -- hostname -I | awk '{print $1}')
-CREDS=$(pct exec $CTID -- cat /root/airflow_credentials.txt)
+IP=$(pct exec $CTID -- hostname -I | awk "{print \$1}")
+CREDS=$(pct exec $CTID -- cat /root/airflow_creds)
 
-msg_ok "Completed successfully!"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:8080${CL}"
-echo -e "${INFO}${YW}${CREDS}${CL}"
+msg_ok "Installation completed!"
+echo ""
+echo "URL: http://${IP}:8080"
+echo "$CREDS"
