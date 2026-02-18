@@ -8,3 +8,4 @@ No shell do Proxmox:
 
 ```bash
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/josebmonteiro/airflow-proxymox/main/airflow.sh)"
+```

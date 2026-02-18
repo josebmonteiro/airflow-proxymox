@@ -21,9 +21,12 @@ catch_errors
 start
 build_container
 
-msg_info "Running Airflow Provisioning inside container"
+msg_info "Provisioning Airflow inside container (this may take a few minutes)"
 
 pct exec $CTID -- bash -c "$(wget -qLO - https://raw.githubusercontent.com/josebmonteiro/airflow-proxymox/main/install.sh)"
+
+msg_info "Waiting Airflow API to respond..."
+sleep 8
 
 msg_ok "Completed successfully!"
 echo -e "${CREATING}${GN}Apache Airflow has been successfully installed!${CL}"
@@ -31,4 +34,3 @@ echo -e "${INFO}${YW}Access it using the following URL:${CL}"
 echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:8080${CL}"
 echo -e "${TAB}User: admin"
 echo -e "${TAB}Password: admin"
-
