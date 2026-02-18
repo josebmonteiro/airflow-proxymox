@@ -1,27 +1,39 @@
 #!/usr/bin/env bash
 set -e
 
+export DEBIAN_FRONTEND=noninteractive
+
 AIRFLOW_VERSION="3.1.0"
-AIRFLOW_HOME="/home/airflow/airflow"
-PASS_FILE="/root/airflow_admin_password"
+PYTHON_VERSION="3.11"
+AIRFLOW_HOME="/opt/airflow"
+ADMIN_FILE="/root/airflow_credentials.txt"
 
-echo "Checking previous installation..."
-if [ -f /etc/systemd/system/airflow-webserver.service ]; then
-  echo "Airflow already installed"
-  exit 0
-fi
+echo "Atualizando sistema..."
+apt update -y
 
-echo "Updating system"
-apt update
+echo "Instalando dependências..."
+apt install -y \
+  python${PYTHON_VERSION} \
+  python${PYTHON_VERSION}-venv \
+  python${PYTHON_VERSION}-dev \
+  build-essential \
+  libpq-dev \
+  postgresql \
+  postgresql-contrib \
+  redis-server \
+  curl \
+  git
 
-echo "Installing dependencies"
-apt install -y python3 python3-venv python3-pip postgresql redis-server \
-build-essential libssl-dev libffi-dev libpq-dev curl
+echo "Iniciando serviços..."
+systemctl enable postgresql || true
+systemctl start postgresql || service postgresql start || true
 
-echo "Creating airflow user"
-useradd -m -s /bin/bash airflow || true
+systemctl enable redis-server || true
+systemctl start redis-server || service redis-server start || true
 
-echo "Creating database"
+sleep 5
+
+echo "Criando usuário e banco no PostgreSQL..."
 sudo -u postgres psql <<EOF
 DO \$\$
 BEGIN
@@ -35,83 +47,38 @@ SELECT 'CREATE DATABASE airflow OWNER airflow'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='airflow')\gexec
 EOF
 
-echo "Installing Airflow and bootstrapping"
-sudo -u airflow bash <<EOF
-cd ~
+echo "Criando diretório do Airflow..."
+mkdir -p $AIRFLOW_HOME
+cd $AIRFLOW_HOME
 
-python3 -m venv airflow-venv
-source airflow-venv/bin/activate
+echo "Criando ambiente virtual..."
+python${PYTHON_VERSION} -m venv venv
+source venv/bin/activate
 
 pip install --upgrade pip setuptools wheel
 
-PYTHON_VERSION=\$(python -c 'import sys;print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-\${PYTHON_VERSION}.txt"
+CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
 
-pip install "apache-airflow[celery,postgres,redis]==${AIRFLOW_VERSION}" --constraint "\${CONSTRAINT_URL}"
+echo "Instalando Airflow ${AIRFLOW_VERSION}..."
+pip install "apache-airflow[celery,postgres,redis]==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
 
-export AIRFLOW_HOME=${AIRFLOW_HOME}
-mkdir -p \$AIRFLOW_HOME/dags
-mkdir -p \$AIRFLOW_HOME/logs
-mkdir -p \$AIRFLOW_HOME/plugins
+export AIRFLOW_HOME=$AIRFLOW_HOME
+export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="postgresql+psycopg2://airflow:airflow@localhost:5432/airflow"
 
-echo "Running standalone bootstrap..."
-airflow standalone > /tmp/airflow_boot.log 2>&1 &
+echo "Inicializando via standalone (isso cria usuário e senha automaticamente)..."
+
+$AIRFLOW_HOME/venv/bin/airflow standalone > standalone.log 2>&1 &
+
 sleep 30
-pkill -f "airflow standalone"
-EOF
 
-echo "Extracting admin password"
-grep "Password for user 'admin'" /home/airflow/airflow/airflow-webserver.log | tail -1 | awk '{print $NF}' > $PASS_FILE || true
+echo "Capturando credenciais..."
 
-echo "Creating systemd services"
+USER_LINE=$(grep -i "username" standalone.log | head -n1 || true)
+PASS_LINE=$(grep -i "password" standalone.log | head -n1 || true)
 
-cat <<EOF >/etc/systemd/system/airflow-webserver.service
-[Unit]
-Description=Airflow API Server
-After=network.target
+echo "$USER_LINE" > $ADMIN_FILE
+echo "$PASS_LINE" >> $ADMIN_FILE
 
-[Service]
-User=airflow
-Environment=AIRFLOW_HOME=/home/airflow/airflow
-ExecStart=/home/airflow/airflow-venv/bin/airflow api-server --port 8080
-Restart=always
+pkill -f "airflow standalone" || true
 
-[Install]
-WantedBy=multi-user.target
-EOF
-
-cat <<EOF >/etc/systemd/system/airflow-scheduler.service
-[Unit]
-Description=Airflow Scheduler
-After=network.target
-
-[Service]
-User=airflow
-Environment=AIRFLOW_HOME=/home/airflow/airflow
-ExecStart=/home/airflow/airflow-venv/bin/airflow scheduler
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-cat <<EOF >/etc/systemd/system/airflow-worker.service
-[Unit]
-Description=Airflow Worker
-After=network.target
-
-[Service]
-User=airflow
-Environment=AIRFLOW_HOME=/home/airflow/airflow
-ExecStart=/home/airflow/airflow-venv/bin/airflow celery worker
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable airflow-webserver airflow-scheduler airflow-worker
-systemctl restart airflow-webserver airflow-scheduler airflow-worker
-
-echo "Airflow installation finished successfully"
+echo "Instalação concluída."

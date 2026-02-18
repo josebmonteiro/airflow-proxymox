@@ -1,38 +1,35 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
 
 # Source: https://airflow.apache.org
 # Author: Jose Monteiro
 # License: MIT
 
-APP="Apache Airflow"
-var_tags="${var_tags:-etl,analytics,python}"
-var_cpu="${var_cpu:-4}"
-var_ram="${var_ram:-4096}"
-var_disk="${var_disk:-20}"
-var_os="${var_os:-debian}"
-var_version="${var_version:-13}"
-var_unprivileged="${var_unprivileged:-1}"
+CTID="$1"
 
-header_info "$APP"
-variables
-color
-catch_errors
-start
-build_container
+if [ -z "$CTID" ]; then
+  echo "Uso: ./airflow.sh <CTID>"
+  exit 1
+fi
 
-msg_info "Provisioning Airflow inside container (this may take a few minutes)"
+echo "Iniciando Airflow no container $CTID..."
 
-pct exec $CTID -- bash -c "$(wget -qLO - https://raw.githubusercontent.com/josebmonteiro/airflow-proxymox/main/install.sh)"
+pct exec $CTID -- bash -c "
+cd /opt/airflow
+source venv/bin/activate
+export AIRFLOW_HOME=/opt/airflow
+export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN='postgresql+psycopg2://airflow:airflow@localhost:5432/airflow'
+airflow standalone > standalone.log 2>&1 &
+sleep 20
+"
 
-msg_info "Waiting for Airflow API..."
-sleep 10
+IP=$(pct exec $CTID -- hostname -I | awk '{print $1}')
 
-PASS=$(pct exec $CTID -- cat /root/airflow_admin_password 2>/dev/null || echo "admin")
+CREDS=$(pct exec $CTID -- cat /root/airflow_credentials.txt 2>/dev/null || echo "Credenciais não encontradas")
 
-msg_ok "Completed successfully!"
-echo -e "${CREATING}${GN}Apache Airflow has been successfully installed!${CL}"
-echo -e "${INFO}${YW}Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:8080${CL}"
-echo -e "${TAB}User: admin"
-echo -e "${TAB}Password: ${PASS}"
+echo ""
+echo "========================================"
+echo "Apache Airflow iniciado com sucesso"
+echo "URL: http://$IP:8080"
+echo ""
+echo "$CREDS"
+echo "========================================"
