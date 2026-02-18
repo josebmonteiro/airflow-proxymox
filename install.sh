@@ -51,15 +51,11 @@ pip install "apache-airflow[celery,postgres,redis]==${AIRFLOW_VERSION}" --constr
 export AIRFLOW_HOME=${AIRFLOW_HOME}
 mkdir -p \$AIRFLOW_HOME
 
-airflow db migrate
+echo "Running initial standalone bootstrap..."
+airflow standalone &
 
-airflow users create \
- --username admin \
- --password admin \
- --firstname Admin \
- --lastname User \
- --role Admin \
- --email admin@local
+sleep 25
+pkill -f "airflow standalone" || true
 EOF
 
 echo "Configuring Airflow"
